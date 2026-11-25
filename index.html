@@ -3,6 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#2b333d">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="미니캐드">
 <style>body{margin:0}[hidden]{display:none!important}</style>
 <title>미니 캐드</title>
 <meta name="claude:viewport-fit-sides" content="cover">
@@ -154,6 +161,9 @@ body.touchui .mi { padding-top: 8px; padding-bottom: 8px; }
 body.touchui .rtab { padding-left: 14px; padding-right: 14px; }
 body.touchui .dynbox input { height: 28px; width: 96px; font-size: 14px; }
 @media (max-height: 700px) { .touchbar button { height: 40px; } .touchbar button span { display: none; } }
+.installbtn { display: flex; align-items: center; gap: 5px; height: 24px; margin-right: 8px; padding: 0 10px; background: var(--accent); color: #fff; border: none; border-radius: 3px; cursor: pointer; font: inherit; white-space: nowrap; flex: none; }
+.installbtn svg { width: 16px; height: 16px; }
+.installbtn[hidden] { display: none; }
 #cv { position: absolute; inset: 0; width: 100%; height: 100%; cursor: none !important; touch-action: none; display: block; }
 .vplabel { position: absolute; left: 8px; top: 6px; font-size: 12px; color: #c9d3dd; pointer-events: auto; display: flex; gap: 2px; z-index: 3; }
 .vplabel span { padding: 0 2px; cursor: default; }
@@ -831,7 +841,7 @@ function grips(e) {
 }
 // ===================== view & rendering =====================
 const cv = document.getElementById('cv');
-const ctx = cv.getContext('2d');
+let ctx = cv.getContext('2d');
 const stage = document.getElementById('stage');
 const view = { scale: 3, tx: 0, ty: 0 };
 const opt = {
@@ -1098,7 +1108,7 @@ function draw() {
     }
   }
   dynFrame();
-  drawLoupe(); tbSync();
+  drawLoupe(); tbSync(); if (typeof drawG3Marks === 'function') drawG3Marks();
 }
 // ===================== prompt engine & selection =====================
 const CANCEL = Symbol('cancel'), ENTER = Symbol('enter');
@@ -2967,7 +2977,7 @@ function saveFile(name, mime, data, isDataUrl) {
   if (dlApi) {
     let fname = name, note = '';
     if (/\.mcad$/i.test(fname)) { fname = fname.replace(/\.mcad$/i, '.json'); note = ' (.json 파일도 열기로 열 수 있습니다)'; }
-    if (/\.(dxf|stl)$/i.test(fname)) { const ext = fname.split('.').pop().toUpperCase(); fname = fname + '.txt'; note = ` — 저장 후 파일 이름 끝의 .txt를 지우면 ${ext} 파일이 됩니다`; }
+    if (/\.(dxf|stl|obj)$/i.test(fname)) { const ext = fname.split('.').pop().toUpperCase(); fname = fname + '.txt'; note = ` — 저장 후 파일 이름 끝의 .txt를 지우면 ${ext} 파일이 됩니다`; }
     const payload = isDataUrl ? dataUrlToBlob(data) : data;
     dlApi.save({ filename: fname, data: payload }).then(() => log(`"${fname}" 파일을 저장했습니다${note}.`, 'm'))
       .catch(err => { const c = err && err.code; if (c === 'declined') log('저장을 취소했습니다.', 'm'); else if (c === 'rate_limited') log('저장 창이 이미 열려 있습니다. 잠시 뒤 다시 시도하세요.', 'e'); else { log('이 화면에서는 파일 저장을 쓸 수 없습니다. 내용 복사 창을 엽니다.', 'e'); dlApi = null; saveFile(name, mime, data, isDataUrl); } });
@@ -2978,7 +2988,7 @@ function saveFile(name, mime, data, isDataUrl) {
     { label: '다운로드 시도', fn: () => { tryDl(); return false; } },
     ...(isDataUrl ? [] : [{ label: '내용 복사', pri: true, fn: b => { const ta = b.querySelector('#ex-ta'); navigator.clipboard.writeText(ta.value).then(() => log('클립보드에 복사했습니다.', 'm')).catch(() => { ta.focus(); ta.select(); log('자동 복사가 막혀 있습니다. 선택된 내용을 Ctrl+C로 복사하세요.', 'm'); }); return false; } }]),
     { label: '닫기' }]);
-  if (!isDataUrl) body.querySelector('#ex-ta').value = data;
+  if (!isDataUrl) body.querySelector('#ex-ta').value = typeof data === 'string' ? data : '(이 파일은 내용 복사로 저장할 수 없습니다. 다운로드 시도를 누르거나 미니캐드.html 파일로 열어 저장하세요.)';
 }
 
 // ===================== file formats =====================
@@ -2992,7 +3002,7 @@ function flatEnts(list) {
   }
   return out;
 }
-function dxfOut() {
+function dxfOut(src) {
   const L = [], w = (c, v) => L.push(String(c), String(v)), f = v => (+v).toFixed(6);
   w(0, 'SECTION'); w(2, 'HEADER'); w(9, '$ACADVER'); w(1, 'AC1009'); w(9, '$INSUNITS'); w(70, 4); w(9, '$LTSCALE'); w(40, D.ltscale); w(0, 'ENDSEC');
   w(0, 'SECTION'); w(2, 'TABLES');
@@ -3009,7 +3019,7 @@ function dxfOut() {
   let skipped = 0;
   const head = (t, e) => { w(0, t); w(8, encDxf(e.layer || '0')); if (e.color != null) w(62, e.color); if (e.lt != null) w(6, e.lt); };
   const poly = (e, pts, closed) => { head('POLYLINE', e); w(66, 1); w(10, f(0)); w(20, f(0)); w(30, f(0)); w(70, closed ? 1 : 0); for (const p of pts) { w(0, 'VERTEX'); w(8, encDxf(e.layer || '0')); w(10, f(p[0])); w(20, f(p[1])); w(30, f(0)); } w(0, 'SEQEND'); w(8, encDxf(e.layer || '0')); };
-  for (const e of flatEnts(D.ents)) {
+  for (const e of flatEnts(src || D.ents)) {
     switch (e.type) {
       case 'line': head('LINE', e); w(10, f(e.x1)); w(20, f(e.y1)); w(30, f(0)); w(11, f(e.x2)); w(21, f(e.y2)); w(31, f(0)); break;
       case 'pline': poly(e, e.pts, e.closed); break;
@@ -3085,11 +3095,13 @@ function dxfIn(text) {
   const sk = Object.entries(skipped).map(([k, v]) => `${k} ${v}개`).join(', ');
   return { doc, skipped: sk };
 }
-function svgOut() {
-  const list = flatEnts(D.ents.filter(isVisible));
-  const b = bboxAll(D.ents.filter(isVisible)); if (!isFinite(b[0])) return null;
+function svgOut(src, so = {}) {
+  const base = src || D.ents.filter(isVisible);
+  const list = flatEnts(base);
+  const b = bboxAll(base); if (!isFinite(b[0])) return null;
   const pad = Math.max(b[2] - b[0], b[3] - b[1]) * 0.03 + 1;
-  const col = e => { const c = colorIdx(e); return c === 7 ? '#000000' : ACI[c]; };
+  const dark = so.bg === 'black';
+  const col = e => { if (so.mono) return dark ? '#ffffff' : '#000000'; const c = colorIdx(e); return c === 7 ? (dark ? '#ffffff' : '#000000') : ACI[c]; };
   const ptsAttr = p => p.map(q => `${q[0].toFixed(4)},${(-q[1]).toFixed(4)}`).join(' ');
   const out = [];
   for (const e of list) {
@@ -3107,7 +3119,7 @@ function svgOut() {
     }
   }
   const vb = [b[0] - pad, -b[3] - pad, b[2] - b[0] + pad * 2, b[3] - b[1] + pad * 2];
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb.map(v => v.toFixed(4)).join(' ')}" width="${Math.round(vb[2] * 4)}" height="${Math.round(vb[3] * 4)}">\n<rect x="${vb[0]}" y="${vb[1]}" width="${vb[2]}" height="${vb[3]}" fill="#ffffff"/>\n${out.join('\n')}\n</svg>\n`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb.map(v => v.toFixed(4)).join(' ')}" width="${Math.round(vb[2] * 4)}" height="${Math.round(vb[3] * 4)}">\n<rect x="${vb[0]}" y="${vb[1]}" width="${vb[2]}" height="${vb[3]}" fill="${dark ? '#212830' : '#ffffff'}"/>\n${out.join('\n')}\n</svg>\n`;
 }
 function setDocName(n) { D.name = n; document.getElementById('docname').textContent = n + '.dwg'; document.getElementById('ftname').textContent = n; }
 function loadDoc(doc, name) {
@@ -3120,8 +3132,8 @@ function loadDoc(doc, name) {
   setDocName(D.name); changed(); syncUI(); zoomExtents();
 }
 const filein = document.getElementById('filein');
-filein.addEventListener('change', () => {
-  const f = filein.files[0]; if (!f) return;
+filein.addEventListener('change', () => { const f = filein.files[0]; if (f) openFileObj(f); });
+function openFileObj(f) {
   const rd = new FileReader();
   rd.onload = () => {
     const name = f.name.replace(/\.[^.]+$/, '');
@@ -3139,7 +3151,7 @@ filein.addEventListener('change', () => {
     filein.value = '';
   };
   rd.readAsText(f);
-});
+}
 
 // ===================== UI-backed commands =====================
 def('LAYER', { alias: ['LA', 'LAYERS'], label: '도면층 특성', icon: 'layer', instant: true, fn: layerDialog });
@@ -3289,7 +3301,7 @@ const RIBBON = [
 ];
 let ribbonTab = 0;
 function shortLabel(id) {
-  const d = CMDS[id], m = { RECTANG: '직사각형', ARRAYRECT: '배열', ARRAYPOLAR: '원형 배열', BREAKATPOINT: '점에서 끊기', DIMLINEAR: '치수', DIMALIGNED: '정렬', DIMRADIUS: '반지름', DIMDIAMETER: '지름', DIMANGULAR: '각도', DIMCONTINUE: '연속', DIMBASELINE: '기준선', DIMSTYLE: '치수 스타일', LAYER: '도면층 특성', MATCHPROP: '특성 일치', INSERT: '삽입', BLOCK: '작성', PASTECLIP: '붙여넣기', COPYCLIP: '복사', CUTCLIP: '잘라내기', TEXT: '문자', ZOOMEXT: '범위', ZOOM: '윈도우', ZOOMIN: '확대', ZOOMOUT: '축소', ZOOMPREV: '이전', DSETTINGS: '제도 설정', PROPERTIES: '특성', GRIDMODE: '그리드', LWDISPLAY: '선가중치', SELECTALL: '전체 선택', DXFIN: 'DXF 가져오기', OPEN: '열기', DXFOUT: 'DXF', SVGOUT: 'SVG', PNGOUT: 'PNG', SAVEAS: '다른 이름', CMDLINE: '명령행', PURGE: '소거', HELP: '도움말', STYLE: '문자 스타일', UNITS: '단위', LTSCALE: '선종류 축척', DIVIDE: '등분할', OFFSET: '간격띄우기', LEADER: '지시선', MAKE3D: '3D 만들기', VIEW3D: '3D 보기', DEMO3D: '예제 열기' };
+  const d = CMDS[id], m = { RECTANG: '직사각형', ARRAYRECT: '배열', ARRAYPOLAR: '원형 배열', BREAKATPOINT: '점에서 끊기', DIMLINEAR: '치수', DIMALIGNED: '정렬', DIMRADIUS: '반지름', DIMDIAMETER: '지름', DIMANGULAR: '각도', DIMCONTINUE: '연속', DIMBASELINE: '기준선', DIMSTYLE: '치수 스타일', LAYER: '도면층 특성', MATCHPROP: '특성 일치', INSERT: '삽입', BLOCK: '작성', PASTECLIP: '붙여넣기', COPYCLIP: '복사', CUTCLIP: '잘라내기', TEXT: '문자', ZOOMEXT: '범위', ZOOM: '윈도우', ZOOMIN: '확대', ZOOMOUT: '축소', ZOOMPREV: '이전', DSETTINGS: '제도 설정', PROPERTIES: '특성', GRIDMODE: '그리드', LWDISPLAY: '선가중치', SELECTALL: '전체 선택', DXFIN: 'DXF 가져오기', OPEN: '열기', DXFOUT: 'DXF', SVGOUT: 'SVG', PNGOUT: 'PNG', SAVEAS: '다른 이름', CMDLINE: '명령행', PURGE: '소거', HELP: '도움말', STYLE: '문자 스타일', UNITS: '단위', LTSCALE: '선종류 축척', DIVIDE: '등분할', OFFSET: '간격띄우기', LEADER: '지시선', MAKE3D: '3D 만들기', VIEW3D: '3D 보기', DEMO3D: '예제 열기', EXPORT: '내보내기/플롯', PDFOUT: 'PDF', JPGOUT: 'JPG' };
   return m[id] || (d ? d.label : id);
 }
 function cmdButton(id, cls) {
@@ -3505,7 +3517,7 @@ function extractLoops(ents) {
   const loops = [];
   const edges = []; // {pts:[[x,y],...]}
   let bb = bboxAll(ents);
-  const diag = hyp(bb[2] - bb[0], bb[3] - bb[1]) || 1, tol = diag * 1e-6 + 1e-9;
+  const diag = hyp(bb[2] - bb[0], bb[3] - bb[1]) || 1, tol = diag * 1e-6 + 1e-9, mergeTol = diag * 6e-4 + 1e-9;
   for (const e of ents) {
     if (e.type === 'circle') { loops.push(arcPts(e.cx, e.cy, e.r, 0, TAU, 64).slice(0, -1)); continue; }
     if (e.type === 'ellipse') { if (e.a1 == null || Math.abs(norm((e.a2 || 0) - (e.a1 || 0))) < 1e-9) loops.push(ellPts(e, 64).slice(0, -1)); continue; }
@@ -3553,7 +3565,7 @@ function extractLoops(ents) {
   // nodes
   const nodes = [];
   const nodeOf = pt => {
-    for (const n of nodes) if (Math.abs(n.x - pt[0]) < tol * 10 && Math.abs(n.y - pt[1]) < tol * 10) return n;
+    for (const n of nodes) if (Math.abs(n.x - pt[0]) < mergeTol && Math.abs(n.y - pt[1]) < mergeTol) return n;
     const n = { x: pt[0], y: pt[1], out: [] }; nodes.push(n); return n;
   };
   const H = []; // half-edges
@@ -3567,6 +3579,7 @@ function extractLoops(ents) {
     if (a.out.some(h => h.to === b && h.pts.length === 2 && g.pts.length === 2)) continue;
     a.out.push(fwd); b.out.push(back); H.push(fwd, back);
   }
+  extractLoops.gaps = nodes.filter(n => n.out.length === 1).map(n => [n.x, n.y]);
   // prune dangling edges
   let pr = true;
   while (pr) {
@@ -3642,7 +3655,7 @@ function interiorPt(p) {
 function groupViews(regions) {
   const n = regions.length, par = regions.map((_, i) => i), f = i => { while (par[i] !== i) i = par[i] = par[par[i]]; return i; };
   const ov = (a, b, g) => a[0] <= b[2] + g && b[0] <= a[2] + g && a[1] <= b[3] + g && b[1] <= a[3] + g;
-  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) if (ov(regions[i].bb, regions[j].bb, 1e-6)) par[f(i)] = f(j);
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) if (ov(regions[i].bb, regions[j].bb, -1e-6 * (1 + Math.abs(regions[i].bb[2]) + Math.abs(regions[i].bb[3])))) par[f(i)] = f(j);
   const m = new Map();
   regions.forEach((r, i) => { const k = f(i); if (!m.has(k)) m.set(k, []); m.get(k).push(r); });
   return [...m.values()].map(rs => {
@@ -3656,8 +3669,12 @@ function identifyViews(views) {
   const yo = (a, b) => Math.min(a.bb[3], b.bb[3]) - Math.max(a.bb[1], b.bb[1]) > 0.3 * Math.min(a.bb[3] - a.bb[1], b.bb[3] - b.bb[1]);
   let best = null;
   for (const f of views) {
-    const tops = views.filter(v => v !== f && v.bb[1] >= f.bb[3] - 1e-6 && xo(v, f)).sort((a, b) => a.bb[1] - b.bb[1]);
-    const sides = views.filter(v => v !== f && v.bb[0] >= f.bb[2] - 1e-6 && yo(v, f)).sort((a, b) => a.bb[0] - b.bb[0]);
+    const e = 1e-6 * (1 + Math.abs(f.bb[2]) + Math.abs(f.bb[3]));
+    // third angle: top above / right view to the right; first angle: top below / right view to the left
+    let tops = views.filter(v => v !== f && v.bb[1] >= f.bb[3] - e && xo(v, f)).sort((a, b) => a.bb[1] - b.bb[1]);
+    if (!tops.length) tops = views.filter(v => v !== f && v.bb[3] <= f.bb[1] + e && xo(v, f)).sort((a, b) => b.bb[3] - a.bb[3]);
+    let sides = views.filter(v => v !== f && v.bb[0] >= f.bb[2] - e && yo(v, f)).sort((a, b) => a.bb[0] - b.bb[0]);
+    if (!sides.length) sides = views.filter(v => v !== f && v.bb[2] <= f.bb[0] + e && yo(v, f)).sort((a, b) => b.bb[2] - a.bb[2]);
     const cand = { front: f, top: tops[0] || null, side: sides[0] || null };
     const score = (cand.top ? 1 : 0) + (cand.side ? 1 : 0);
     if (score && (!best || score > best.score || (score === best.score && f.area > best.front.area))) best = Object.assign(cand, { score });
@@ -3893,6 +3910,12 @@ function featureEdges(polys) {
   }
   return res;
 }
+function objText(polys, name) {
+  const L = [`# mini CAD 3D export`, `o ${name}`], idx = new Map(); let n = 0;
+  const vi = v => { const k = v.map(x => (+x).toFixed(6)).join(' '); if (!idx.has(k)) { idx.set(k, ++n); L.push('v ' + k); } return idx.get(k); };
+  const faces = polys.map(q => 'f ' + q.v.map(vi).join(' '));
+  return L.concat(faces).join('\n') + '\n';
+}
 function stlText(polys, name) {
   const f = x => (+x.toFixed(6)).toString(), lines = [`solid ${name}`];
   for (const q of polys) for (let i = 1; i < q.v.length - 1; i++) {
@@ -3941,7 +3964,7 @@ function v3Init() {
   el.innerHTML = `<div class="v3bar"><b class="v3title">3D</b>
     <div class="v3btns">
       <button data-v3="iso" title="남동 등각">등각</button><button data-v3="front">정면</button><button data-v3="top">평면</button><button data-v3="right">우측</button><button data-v3="iso2" title="남서 등각">등각2</button>
-      <span class="v3sep"></span><button data-v3="mode">와이어프레임</button><button data-v3="stl">STL 저장</button><button data-v3="close" title="닫기 (Esc)">닫기 ✕</button>
+      <span class="v3sep"></span><button data-v3="mode">와이어프레임</button><button data-v3="stl">STL 저장</button><button data-v3="obj">OBJ 저장</button><button data-v3="close" title="닫기 (Esc)">닫기 ✕</button>
     </div></div>
     <canvas class="v3cv"></canvas>
     <div class="v3foot"><span class="v3info"></span><span class="v3warn" hidden></span><span class="v3help">왼쪽 드래그: 회전 · 오른쪽/가운데 드래그: 이동 · 휠: 확대/축소 · 더블클릭: 전체 보기</span></div>`;
@@ -3952,6 +3975,7 @@ function v3Init() {
     const k = b.dataset.v3;
     if (k === 'close') v3Close();
     else if (k === 'mode') { V3.mode = V3.mode === 'shade' ? 'wire' : 'shade'; b.textContent = V3.mode === 'shade' ? '와이어프레임' : '음영'; v3Draw(); }
+    else if (k === 'obj') { const nm = (D.name || 'model') + '_3d'; saveFile(nm + '.obj', 'model/obj', objText(V3.polys, nm)); }
     else if (k === 'stl') { const nm = (D.name || 'model') + '_3d'; saveFile(nm + '.stl', 'model/stl', stlText(V3.polys, nm)); }
     else v3View(k);
   });
@@ -4065,23 +4089,38 @@ function v3Triad(d, r, up, w, h) {
   }
 }
 
+// ---------- markers for problems (open ends, unaligned views) ----------
+const G3 = { marks: [] };
+function drawG3Marks() {
+  if (!G3.marks.length) return;
+  ctx.save(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.setLineDash([]);
+  ctx.strokeStyle = '#e0605a'; ctx.lineWidth = 2;
+  for (const [x, y] of G3.marks) { const [sx, sy] = w2s(x, y); ctx.beginPath(); ctx.arc(sx, sy, 9, 0, TAU); ctx.stroke(); }
+  ctx.restore();
+}
 // ---------- commands ----------
 def('MAKE3D', { alias: ['3D', '3DM', 'M3D', 'TO3D'], label: '3면도로 3D 만들기', icon: 'cube', async fn() {
-  log('평면도·정면도·우측면도를 한꺼번에 선택하세요. 정면도 위에 평면도, 오른쪽에 우측면도를 둡니다 (3각법). 숨은선·중심선·치수·문자는 자동으로 빠집니다.', 'm');
-  const list = await getSel('세 도면을 모두 선택 (창 선택 권장):');
+  G3.marks = []; redraw();
+  log('정면도 위(또는 아래)에 평면도, 오른쪽(또는 왼쪽)에 우측면도를 그려 두고 실행하세요. 숨은선·중심선·치수·문자는 자동으로 빠집니다.', 'm');
+  let list = await getSel('세 도면을 창으로 선택 또는 <Enter=도면 전체>:', { allowEmpty: true });
+  if (!list.length) { list = D.ents.filter(isVisible); log(`도면 전체 ${list.length}개 객체를 사용합니다.`, 'm'); }
   const ents = list.filter(isProfileEnt);
   if (!ents.length) { log('윤곽선으로 쓸 선·호·원·폴리선이 없습니다. (숨은선/중심선 선종류는 제외됩니다)', 'e'); return; }
   const regions = loopsToRegions(extractLoops(ents));
-  if (!regions.length) { log('닫힌 윤곽을 찾지 못했습니다. 바깥 윤곽선이 끝점끼리 정확히 이어져 있는지 확인하세요.', 'e'); return; }
+  const gaps = extractLoops.gaps || [];
+  if (!regions.length) { G3.marks = gaps; redraw(); log(`닫힌 윤곽을 찾지 못했습니다. 끝점이 이어지지 않은 곳 ${gaps.length}군데를 빨간 원으로 표시했습니다. 객체 스냅(끝점)으로 이어서 그려 주세요.`, 'e'); return; }
   const views = groupViews(regions);
+  log(`닫힌 윤곽 ${regions.length}개, 도면 ${views.length}개를 찾았습니다.`, 'm');
   let res, title;
   const t0 = performance.now();
   if (views.length === 1) {
-    const h = await getNum('뷰가 하나뿐입니다. 평면도로 보고 돌출 높이 지정 <10>:', { def: 10 });
+    log('도면이 1개로만 인식됐습니다. 세 도면이 서로 맞닿아 있으면 하나로 보이니 도면 사이를 조금 띄워 주세요. 이 도면 하나를 그대로 밀어 올리려면 높이를 입력하세요 (Esc: 취소).', 'e');
+    const h = await getNum('돌출 높이 지정 <10>:', { def: 10 });
     res = extrudeOnly(views[0], Math.abs(h) || 10); title = '3D — 돌출';
   } else {
     const id = identifyViews(views);
-    if (!id) { log(`도면 ${views.length}개를 찾았지만 배치를 알아볼 수 없습니다. 정면도 바로 위에 평면도, 바로 오른쪽에 우측면도를 두세요.`, 'e'); return; }
+    if (!id) { G3.marks = views.map(v => [(v.bb[0] + v.bb[2]) / 2, (v.bb[1] + v.bb[3]) / 2]); redraw(); log(`도면 ${views.length}개를 찾았지만 서로 줄이 맞지 않아 배치를 알아볼 수 없습니다. 평면도는 정면도와 좌우 폭이, 측면도는 정면도와 높이가 겹치게 나란히 두세요.`, 'e'); return; }
+    if (gaps.length && views.length < 3) { G3.marks = gaps; redraw(); log(`참고: 끝점이 이어지지 않은 곳 ${gaps.length}군데가 있어 빨간 원으로 표시했습니다. 빠진 도면이 있다면 그 윤곽이 닫혀 있는지 확인하세요.`, 'm'); }
     const used = [id.front, id.top, id.side].filter(Boolean).length;
     log(`정면도${id.top ? ' + 평면도' : ''}${id.side ? ' + 우측면도' : ''} 인식${views.length > used ? ` (나머지 ${views.length - used}개 무시)` : ''}`, 'm');
     res = build3D(id); title = '3D — ' + (id.top && id.side ? '3면도' : '2면도') + '에서 생성';
@@ -4141,6 +4180,227 @@ ICONS.cube = `<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-
 MENUS.splice(MENUS.findIndex(m => m[0] === '수정') + 1, 0, ['3D', '3', [['MAKE3D', '', '3면도로 3D 만들기...'], ['VIEW3D', '', '3D 보기 다시 열기'], '-', ['DEMO3D', '', '3면도 예제 열기']]]);
 RIBBON.splice(1, 0, ['3D', [['3면도 → 3D', [big('MAKE3D'), big('VIEW3D')]], ['예제', [big('DEMO3D')]]]]);
 document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && V3.el && !V3.el.hidden && !R.req) { ev.preventDefault(); ev.stopImmediatePropagation(); v3Close(); } }, true);
+// ===================== export / plot (formats, range, paper, colors) =====================
+const PAPER = { A4: [297, 210], A3: [420, 297], A2: [594, 420], A1: [841, 594], A0: [1189, 841], Letter: [279.4, 215.9] };
+const EXP_DEF = { fmt: 'pdf', range: 'ext', bg: 'white', mono: false, lwt: true, px: 3840, paper: 'A4', orient: 'auto', scale: 'fit', margin: 10, dpi: 200, name: '' };
+function expLoad() { try { return Object.assign({}, EXP_DEF, JSON.parse(localStorage.getItem('mini-cad-export') || '{}')); } catch (_) { return Object.assign({}, EXP_DEF); } }
+function expStore(o) { try { const c = Object.assign({}, o); delete c.name; localStorage.setItem('mini-cad-export', JSON.stringify(c)); } catch (_) {} }
+// light colours (yellow, cyan…) are unreadable on white paper: darken them
+function darkenLight(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex); if (!m) return hex;
+  let n = parseInt(m[1], 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+  const L = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  if (L < 0.5) return hex;
+  const k = 0.42 / L; r = Math.round(r * k); g = Math.round(g * k); b = Math.round(b * k);
+  return '#' + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
+}
+// draw a world box into a new canvas of pw x ph pixels
+function renderRegion(list, b, pw, ph, o) {
+  const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(pw)); c.height = Math.max(1, Math.round(ph));
+  const g = c.getContext('2d');
+  const save = { ctx, scale: view.scale, tx: view.tx, ty: view.ty, W, H, dpr, lwt: opt.lwt };
+  const s = Math.min(c.width / (b[2] - b[0] || 1), c.height / (b[3] - b[1] || 1));
+  const dark = o.bg === 'black';
+  try {
+    ctx = g; view.scale = s; view.tx = c.width / 2 - (b[0] + b[2]) / 2 * s; view.ty = c.height / 2 + (b[1] + b[3]) / 2 * s;
+    W = c.width; H = c.height; dpr = 1; opt.lwt = false;
+    g.fillStyle = dark ? CL.canvas : '#ffffff'; g.fillRect(0, 0, c.width, c.height);
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    const order = [...list.filter(e => e.type === 'hatch'), ...list.filter(e => e.type !== 'hatch')];
+    for (const e of order) {
+      let color;
+      if (o.mono) color = dark ? '#ffffff' : '#000000';
+      else { const ci = colorIdx(e); color = ci === 7 ? (dark ? '#ffffff' : '#000000') : (ACI[ci] || '#000000'); if (!dark) color = darkenLight(color); }
+      const lw = lwOf(e) || 0.25;
+      const width = o.lwt ? Math.max(1, lw * o.pxPerMm) : Math.max(1, o.thin);
+      drawEnt(e, { color, width });
+    }
+  } finally {
+    ctx = save.ctx; view.scale = save.scale; view.tx = save.tx; view.ty = save.ty; W = save.W; H = save.H; dpr = save.dpr; opt.lwt = save.lwt;
+    SEGC = new WeakMap(); redraw();
+  }
+  return c;
+}
+function pdfFromJpeg(jpegBytes, imgW, imgH, pageWpt, pageHpt, place) {
+  const enc = new TextEncoder(), parts = [], offs = [];
+  let len = 0;
+  const push = x => { const u = typeof x === 'string' ? enc.encode(x) : x; parts.push(u); len += u.length; };
+  push('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+  const obj = (n, body) => { offs[n] = len; push(`${n} 0 obj\n`); for (const b of [].concat(body)) push(b); push('\nendobj\n'); };
+  const f = v => (+v).toFixed(3);
+  obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
+  obj(2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
+  obj(3, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${f(pageWpt)} ${f(pageHpt)}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>`);
+  obj(4, [`<< /Type /XObject /Subtype /Image /Width ${imgW} /Height ${imgH} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`, jpegBytes, '\nendstream']);
+  const cs = `q ${f(place.w)} 0 0 ${f(place.h)} ${f(place.x)} ${f(place.y)} cm /Im0 Do Q`;
+  obj(5, `<< /Length ${cs.length} >>\nstream\n${cs}\nendstream`);
+  const xref = len;
+  push(`xref\n0 6\n0000000000 65535 f \n${[1, 2, 3, 4, 5].map(n => String(offs[n]).padStart(10, '0') + ' 00000 n \n').join('')}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return new Blob(parts, { type: 'application/pdf' });
+}
+const b64ToBytes = u => { const bin = atob(u.split(',')[1]), a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a; };
+function expDialog(o) {
+  return new Promise(resolve => {
+    const opt2 = (v, cur, label) => `<option value="${v}"${String(v) === String(cur) ? ' selected' : ''}>${label}</option>`;
+    const body = openDialog('내보내기 / 플롯', `
+      <div class="form">
+        <label for="ex-name">파일 이름</label><input id="ex-name" type="text" value="${esc(o.name)}">
+        <label for="ex-fmt">형식</label><select id="ex-fmt">
+          ${opt2('pdf', o.fmt, 'PDF — 인쇄용 (용지·축척 지정)')}${opt2('png', o.fmt, 'PNG 이미지')}${opt2('jpg', o.fmt, 'JPG 이미지')}${opt2('svg', o.fmt, 'SVG 벡터 (웹·일러스트레이터)')}${opt2('dxf', o.fmt, 'DXF (오토캐드 등)')}${opt2('mcad', o.fmt, '미니캐드 도면 (.mcad)')}</select>
+        <label for="ex-range">범위</label><select id="ex-range">
+          ${opt2('ext', o.range, '도면 전체 (범위)')}${opt2('view', o.range, '현재 화면')}${opt2('win', o.range, '창 지정 (두 점 클릭)')}${opt2('sel', o.range, '선택한 객체만')}</select>
+        <label for="ex-bg" data-g="look">배경</label><select id="ex-bg" data-g="look">${opt2('white', o.bg, '흰색 (인쇄용)')}${opt2('black', o.bg, '어두운 색 (화면과 같게)')}</select>
+        <label data-g="look">색상</label><div class="checks" data-g="look" style="grid-template-columns:1fr 1fr"><label><input type="checkbox" id="ex-mono" ${o.mono ? 'checked' : ''}>흑백으로</label><label><input type="checkbox" id="ex-lwt" ${o.lwt ? 'checked' : ''}>선가중치 반영</label></div>
+        <label for="ex-px" data-g="img">이미지 가로 크기</label><select id="ex-px" data-g="img">${[1280, 1920, 2560, 3840, 7680].map(v => opt2(v, o.px, `${v} px${v === 3840 ? ' (4K)' : v === 7680 ? ' (8K)' : ''}`)).join('')}</select>
+        <label for="ex-paper" data-g="pdf">용지</label><select id="ex-paper" data-g="pdf">${Object.keys(PAPER).map(k => opt2(k, o.paper, `${k} (${PAPER[k][0]}×${PAPER[k][1]}mm)`)).join('')}</select>
+        <label for="ex-orient" data-g="pdf">방향</label><select id="ex-orient" data-g="pdf">${opt2('auto', o.orient, '자동')}${opt2('land', o.orient, '가로')}${opt2('port', o.orient, '세로')}</select>
+        <label for="ex-scale" data-g="pdf">축척</label><select id="ex-scale" data-g="pdf">${opt2('fit', o.scale, '용지에 맞춤')}${['1:1', '1:2', '1:5', '1:10', '1:20', '1:50', '1:100', '2:1', '5:1'].map(k => opt2(k, o.scale, k)).join('')}</select>
+        <label for="ex-margin" data-g="pdf">여백 (mm)</label><input id="ex-margin" data-g="pdf" type="number" min="0" max="50" step="1" value="${o.margin}">
+        <label for="ex-dpi" data-g="pdf">인쇄 해상도</label><select id="ex-dpi" data-g="pdf">${[150, 200, 300].map(v => opt2(v, o.dpi, v + ' dpi')).join('')}</select>
+      </div>
+      <p class="note" id="ex-note"></p>`, [
+      { label: '내보내기', pri: true, fn: b => {
+        const q = id => b.querySelector(id);
+        const r = { name: q('#ex-name').value.trim() || D.name, fmt: q('#ex-fmt').value, range: q('#ex-range').value, bg: q('#ex-bg').value, mono: q('#ex-mono').checked, lwt: q('#ex-lwt').checked,
+          px: +q('#ex-px').value, paper: q('#ex-paper').value, orient: q('#ex-orient').value, scale: q('#ex-scale').value, margin: Math.max(0, +q('#ex-margin').value || 0), dpi: +q('#ex-dpi').value };
+        resolve(r);
+      } }, { label: '취소', fn: () => resolve(null) }]);
+    const upd = () => {
+      const f = body.querySelector('#ex-fmt').value;
+      body.querySelectorAll('[data-g="img"]').forEach(el => { el.hidden = !(f === 'png' || f === 'jpg'); });
+      body.querySelectorAll('[data-g="pdf"]').forEach(el => { el.hidden = f !== 'pdf'; });
+      body.querySelectorAll('[data-g="look"]').forEach(el => { el.hidden = f === 'dxf' || f === 'mcad'; });
+      const notes = { pdf: 'PDF는 선택한 용지에 그대로 인쇄할 수 있습니다. 축척 1:1이면 도면 1단위가 종이 위 1mm입니다.', png: '투명하지 않은 이미지로 저장합니다. 문서나 메신저에 붙여넣기 좋습니다.', jpg: 'PNG보다 파일이 작습니다. 사진처럼 약간 뭉개질 수 있습니다.', svg: '확대해도 깨지지 않는 벡터 그림입니다. 범위는 전체 또는 선택한 객체만 적용됩니다.', dxf: '오토캐드·다른 CAD에서 열 수 있습니다. 범위는 전체 또는 선택한 객체만 적용됩니다.', mcad: '미니캐드에서 다시 열어 계속 편집할 수 있는 원본입니다.' };
+      body.querySelector('#ex-note').textContent = notes[f];
+    };
+    body.querySelector('#ex-fmt').addEventListener('change', upd); upd();
+    // closing with × or the backdrop counts as cancel
+    const bg = document.querySelector('.modal-bg');
+    new MutationObserver((m, obs) => { if (!document.body.contains(bg)) { obs.disconnect(); resolve(null); } }).observe(document.body, { childList: true });
+  });
+}
+async function exportRun(preset) {
+  const o = Object.assign(expLoad(), preset || {}, { name: D.name });
+  const r = await expDialog(o);
+  if (!r) { log('내보내기를 취소했습니다.', 'm'); return; }
+  expStore(r);
+  let list = D.ents.filter(isVisible), b = null;
+  if (r.range === 'sel') {
+    const s = D.ents.filter(e => sel.has(e.id) && isVisible(e));
+    if (s.length) list = s; else { const picked = await getSel('내보낼 객체 선택:'); list = picked; }
+  }
+  if (r.range === 'view') { const [x0, y1] = s2w(0, 0), [x1, y0] = s2w(W, H); b = [x0, y0, x1, y1]; }
+  if (r.range === 'win') {
+    const a = await getPoint('내보낼 범위의 첫 번째 구석 지정:', { osnap: false });
+    const c = await getPoint('반대 구석 지정:', { osnap: false, base: a, rubber: false, preview: q => [{ type: 'pline', closed: true, pts: rectPts(a, q), __c: '#5fc27a', __d: [5, 4] }] });
+    b = [Math.min(a.x, c.x), Math.min(a.y, c.y), Math.max(a.x, c.x), Math.max(a.y, c.y)];
+  }
+  if (!list.length) { log('내보낼 객체가 없습니다.', 'e'); return; }
+  if (!b) { b = bboxAll(list); const pad = Math.max(b[2] - b[0], b[3] - b[1]) * 0.02 + 0.5; b = [b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad]; }
+  else list = list.filter(e => { const q = bbox(e); return q[2] >= b[0] && q[0] <= b[2] && q[3] >= b[1] && q[1] <= b[3]; });
+  const name = r.name.replace(/[\\/:*?"<>|]/g, '_');
+  const bw = b[2] - b[0], bh = b[3] - b[1];
+  if (r.fmt === 'mcad') { saveFile(name + '.mcad', 'application/json', r.range === 'ext' ? snapshot() : JSON.stringify(Object.assign({}, D, { ents: list }))); return; }
+  if (r.fmt === 'dxf') { saveFile(name + '.dxf', 'application/dxf', dxfOut(list)); return; }
+  if (r.fmt === 'svg') { const s = svgOut(list, { bg: r.bg, mono: r.mono }); if (s) saveFile(name + '.svg', 'image/svg+xml', s); return; }
+  if (r.fmt === 'png' || r.fmt === 'jpg') {
+    let pw = r.px, ph = pw * bh / bw;
+    const cap = 40e6; if (pw * ph > cap) { const k = Math.sqrt(cap / (pw * ph)); pw *= k; ph *= k; }
+    const c = renderRegion(list, b, pw, ph, { bg: r.bg, mono: r.mono, lwt: r.lwt, pxPerMm: pw / 400, thin: pw / 1600 });
+    const url = r.fmt === 'png' ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.92);
+    saveFile(`${name}.${r.fmt}`, r.fmt === 'png' ? 'image/png' : 'image/jpeg', url, true);
+    log(`${r.fmt.toUpperCase()} ${Math.round(pw)}×${Math.round(ph)} px로 내보냈습니다.`, 'r');
+    return;
+  }
+  // PDF
+  let [pw, ph] = PAPER[r.paper] || PAPER.A4;
+  const land = r.orient === 'land' || (r.orient === 'auto' && bw >= bh);
+  if (land !== (pw >= ph)) [pw, ph] = [ph, pw];
+  const m = Math.min(r.margin, Math.min(pw, ph) / 3), aw = pw - 2 * m, ah = ph - 2 * m;
+  let k; // paper mm per drawing unit
+  if (r.scale === 'fit') k = Math.min(aw / bw, ah / bh);
+  else { const [a, c] = r.scale.split(':').map(Number); k = a / c; }
+  let iw = bw * k, ih = bh * k, bb = b.slice();
+  if (iw > aw + 1e-6 || ih > ah + 1e-6) {
+    log(`주의: 축척 ${r.scale}에서는 도면이 용지보다 커서 가운데 부분만 들어갑니다. 더 큰 용지나 작은 축척을 고르세요.`, 'e');
+    const cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2, hw = Math.min(bw, aw / k) / 2, hh = Math.min(bh, ah / k) / 2;
+    bb = [cx - hw, cy - hh, cx + hw, cy + hh]; iw = (bb[2] - bb[0]) * k; ih = (bb[3] - bb[1]) * k;
+  }
+  let dpi = r.dpi; while ((iw / 25.4 * dpi) * (ih / 25.4 * dpi) > 36e6 && dpi > 72) dpi -= 25;
+  const ppm = dpi / 25.4, cpw = iw * ppm, cph = ih * ppm;
+  const c = renderRegion(list, bb, cpw, cph, { bg: r.bg, mono: r.mono, lwt: r.lwt, pxPerMm: ppm, thin: Math.max(1, 0.18 * ppm) });
+  const jpg = b64ToBytes(c.toDataURL('image/jpeg', 0.92));
+  const pt = 72 / 25.4;
+  const blob = pdfFromJpeg(jpg, c.width, c.height, pw * pt, ph * pt, { x: (pw - iw) / 2 * pt, y: (ph - ih) / 2 * pt, w: iw * pt, h: ih * pt });
+  saveFile(name + '.pdf', 'application/pdf', blob);
+  log(`PDF ${r.paper} ${land ? '가로' : '세로'}, 축척 ${r.scale === 'fit' ? `맞춤 (약 1:${fmtN(1 / k, 2)})` : r.scale}, ${dpi}dpi로 내보냈습니다.`, 'r');
+}
+def('EXPORT', { alias: ['EXP', 'PLOT', 'PRINT', 'EXPORTALL'], label: '내보내기 / 플롯...', icon: 'export', async fn(a) { await exportRun(a); } });
+def('PDFOUT', { alias: ['EXPORTPDF', 'PDF'], label: 'PDF 내보내기...', icon: 'export', async fn() { await exportRun({ fmt: 'pdf' }); } });
+def('JPGOUT', { alias: ['EXPORTJPG', 'JPG'], label: 'JPG 내보내기...', icon: 'png', async fn() { await exportRun({ fmt: 'jpg' }); } });
+// menus / ribbon / shortcut
+{
+  const fileMenu = MENUS.find(m => m[0] === '파일')[2];
+  const ex = fileMenu.find(x => x && x.label === '내보내기');
+  if (ex) ex.sub = [['EXPORT', 'Ctrl+P', '내보내기 / 플롯...'], '-', ['PDFOUT'], ['PNGOUT'], ['JPGOUT'], ['SVGOUT'], ['DXFOUT']];
+  const outTab = RIBBON.find(t => t[0] === '출력');
+  if (outTab) outTab[1].unshift(['플롯', [big('EXPORT'), big('PDFOUT')]]);
+  document.addEventListener('keydown', ev => {
+    if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && ev.key.toLowerCase() === 'p') { ev.preventDefault(); ev.stopImmediatePropagation(); if (!document.querySelector('.modal-bg')) runCommand('EXPORT'); }
+  }, true);
+}
+// ===================== installable app (PWA): offline cache, install button, open files from the OS =====================
+let installEvt = null;
+const isStandaloneApp = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+if (!framed && (location.protocol === 'https:' || location.hostname === 'localhost') && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    reg.addEventListener('updatefound', () => {
+      const w = reg.installing; if (!w) return;
+      w.addEventListener('statechange', () => { if (w.state === 'installed' && navigator.serviceWorker.controller) log('새 버전이 준비됐습니다. 앱을 다시 열면 적용됩니다.', 'm'); });
+    });
+  }).catch(() => {});
+}
+window.addEventListener('beforeinstallprompt', ev => { ev.preventDefault(); installEvt = ev; installBtn(true); });
+window.addEventListener('appinstalled', () => { installEvt = null; installBtn(false); log('미니캐드 앱을 설치했습니다. 홈 화면(바탕화면)의 아이콘으로 열 수 있습니다.', 'r'); });
+function installBtn(show) {
+  let b = document.getElementById('installbtn');
+  if (!b && show) {
+    b = document.createElement('button'); b.id = 'installbtn'; b.className = 'installbtn'; b.type = 'button';
+    b.innerHTML = `${ic('export')}<span>앱 설치</span>`; b.title = '미니캐드를 앱으로 설치';
+    b.addEventListener('click', () => runCommand('INSTALLAPP'));
+    document.querySelector('.titlebar').appendChild(b);
+  }
+  if (b) b.hidden = !show;
+}
+def('INSTALLAPP', { alias: ['INSTALL', 'APP'], label: '앱으로 설치', icon: 'export', instant: true, fn: () => {
+  if (isStandaloneApp()) { log('이미 앱으로 실행 중입니다.', 'm'); return; }
+  if (installEvt) { const e = installEvt; installEvt = null; e.prompt(); e.userChoice.then(c => { if (c.outcome !== 'accepted') { installEvt = null; log('설치를 취소했습니다.', 'm'); } installBtn(false); }); return; }
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  openDialog('앱으로 설치', `
+    ${framed || location.protocol !== 'https:' ? '<p class="note"><b>지금 화면에서는 설치할 수 없습니다.</b> 깃허브에 올린 주소(https://아이디.github.io/…)에서 열어야 설치 버튼이 나옵니다.</p>' : ''}
+    <p class="note"><b>안드로이드 (크롬, 삼성 인터넷)</b><br>오른쪽 위 ⋮ 메뉴 → <b>앱 설치</b> 또는 <b>홈 화면에 추가</b>를 누릅니다.</p>
+    <p class="note"><b>PC (크롬, 엣지)</b><br>주소창 오른쪽의 설치 아이콘(모니터에 화살표 모양)을 누르거나, ⋮ 메뉴 → <b>저장 및 공유 → 앱 설치</b>.</p>
+    <p class="note"><b>아이패드·아이폰 (사파리)</b><br>공유 버튼 → <b>홈 화면에 추가</b>.${ios ? ' (지금 쓰시는 기기입니다)' : ''}</p>
+    <p class="note">설치한 앱은 인터넷이 없어도 열리고, 도면은 기기에 자동 저장됩니다.</p>`, [{ label: '닫기', pri: true }], { small: true });
+} });
+// files opened with the app from the OS (desktop Chrome/Edge: "Open with → 미니캐드")
+if ('launchQueue' in window) {
+  window.launchQueue.setConsumer(async params => {
+    for (const h of params.files || []) { try { const f = await h.getFile(); openFileObj(f); } catch (_) {} break; }
+  });
+}
+// drag a .dxf / .mcad file onto the window to open it
+document.addEventListener('dragover', ev => { if (ev.dataTransfer && [...ev.dataTransfer.types].includes('Files')) ev.preventDefault(); });
+document.addEventListener('drop', ev => {
+  const f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+  if (f && /\.(dxf|mcad|json)$/i.test(f.name)) { ev.preventDefault(); openFileObj(f); }
+});
+{
+  const fileMenu = MENUS.find(m => m[0] === '파일')[2];
+  fileMenu.push('-', ['INSTALLAPP', '', '앱으로 설치...']);
+  const helpMenu = MENUS.find(m => m[0] === '도움말'); if (helpMenu) helpMenu[2].push(['INSTALLAPP', '', '앱으로 설치...']);
+  if (isStandaloneApp()) document.documentElement.classList.add('as-app');
+}
 // ===================== boot =====================
 function seedLayers(doc) {
   doc.layers = [
