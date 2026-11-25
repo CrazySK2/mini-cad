@@ -140,7 +140,11 @@ svg.i { width: 18px; height: 18px; flex: none; display: block; }
 .v3btns button:hover { background: var(--chrome-3); }
 .v3btns button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .v3sep { width: 1px; height: 18px; background: var(--rule); margin: 0 4px; }
-.v3cv { flex: 1; min-height: 0; width: 100%; display: block; cursor: grab; touch-action: none; }
+.v3wrap { flex: 1; min-height: 0; position: relative; }
+.v3ov { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.v3btns button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.v3btns button[hidden] { display: none; }
+.v3cv { position: absolute; inset: 0; height: 100%; width: 100%; display: block; cursor: grab; touch-action: none; }
 .v3cv:active { cursor: grabbing; }
 .v3foot { display: flex; gap: 16px; padding: 4px 10px; font-size: 11.5px; color: var(--muted); background: var(--chrome-0); border-top: 1px solid var(--rule-soft); flex-wrap: wrap; }
 .v3info { color: var(--text); font-family: var(--f-mono); }
@@ -3826,7 +3830,10 @@ function build3D(id) {
     const T = viewSolid(top, (u, v, w) => [u, v, w], false, Z0 - m, Z1 + m, p => [p[0], p[1] - t0]);
     solid = CSG.intersect(solid, T);
   }
-  return { polys: solid || [], warn };
+  const maps = [{ bb: front.bb, f: (x, y) => [x, 0, y], axis: 1, dir: 1 }];
+  if (top) { const t0 = top.bb[1]; maps.push({ bb: top.bb, f: (x, y) => [x, y - t0, Z1], axis: 2, dir: -1 }); }
+  if (side) { const s0 = side.bb[0]; maps.push({ bb: side.bb, f: (x, y) => [X1, x - s0, y], axis: 0, dir: -1 }); }
+  return { polys: solid || [], warn, maps };
 }
 function extrudeOnly(view, h) {
   return { polys: viewSolid(view, (u, v, w) => [u, v, w], false, 0, h, p => [p[0], p[1]]), warn: [] };
@@ -3928,9 +3935,73 @@ function stlText(polys, name) {
 
 // ---------- 3D viewer (WebGL) ----------
 const V3 = { el: null, gl: null, polys: [], tri: null, edges: null, nTri: 0, nEdge: 0, az: rad(-60), elv: rad(28), h: 100, t: [0, 0, 0], R: 100, mode: 'shade', drag: null, prog: null };
-function v3Open(polys, title, warn) {
+// drawing dimensions -> 3D: each dim goes onto the face of the view it was drawn next to
+// first surface hit along a coordinate axis (used to put hole callouts on the real face, not the bounding box)
+function axisHit(polys, p, axis, dir) {
+  let best = null;
+  for (const q of polys) {
+    const n = q.p.n; if (Math.abs(n[axis]) < 1e-6) continue;
+    const i1 = (axis + 1) % 3, i2 = (axis + 2) % 3;
+    const c = (q.p.w - n[i1] * p[i1] - n[i2] * p[i2]) / n[axis];
+    if (!ptInPoly(p[i1], p[i2], q.v.map(v => [v[i1], v[i2]]))) continue;
+    if (best === null || (dir > 0 ? c < best : c > best)) best = c;
+  }
+  return best;
+}
+function dims3D(dimEnts, maps, polys) {
+  const out = [];
+  if (!maps || !maps.length) return out;
+  const size = Math.max(...maps.map(m => Math.max(m.bb[2] - m.bb[0], m.bb[3] - m.bb[1])));
+  for (const e of dimEnts) {
+    let p;
+    if (e.x1 !== undefined) p = [(e.x1 + e.x2) / 2, (e.y1 + e.y2) / 2];
+    else if (e.cx !== undefined) p = [e.cx, e.cy];
+    else { const b = bbox(e); p = [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2]; }
+    let best = null, bd = Infinity;
+    for (const m of maps) {
+      const dx = Math.max(m.bb[0] - p[0], 0, p[0] - m.bb[2]), dy = Math.max(m.bb[1] - p[1], 0, p[1] - m.bb[3]), d = Math.hypot(dx, dy);
+      if (d < bd) { bd = d; best = m; }
+    }
+    if (!best || bd > size * 0.35) continue;
+    let g; try { g = annoGeom(e); } catch (_) { continue; }
+    let F = best.f;
+    if (polys && e.cx !== undefined && best.axis !== undefined) {
+      const rr = (e.r || 0) * 1.08 + 0.01, probe = best.f(e.cx + rr, e.cy), probe2 = best.f(e.cx - rr, e.cy);
+      const hits = [axisHit(polys, probe, best.axis, best.dir), axisHit(polys, probe2, best.axis, best.dir)].filter(v => v !== null);
+      if (hits.length) { const hv = best.dir > 0 ? Math.min(...hits) : Math.max(...hits), base = best.f; F = (x, y) => { const q = base(x, y); q[best.axis] = hv; return q; }; }
+    }
+    const segs = [];
+    for (const s of g.L) segs.push([F(s[0], s[1]), F(s[2], s[3])]);
+    for (const a of g.ARC) { const sp = norm(a.a2 - a.a1) || TAU, n = Math.max(6, Math.ceil(sp / TAU * 48)); let prev = null; for (let i = 0; i <= n; i++) { const t = a.a1 + sp * i / n, q = F(a.cx + a.r * Math.cos(t), a.cy + a.r * Math.sin(t)); if (prev) segs.push([prev, q]); prev = q; } }
+    const S = D.dim, arrows = (g.A || []).map(a => { const c = Math.cos(a.ang), s = Math.sin(a.ang), L = S.asz, w = S.asz / 6; return [F(a.x, a.y), F(a.x - c * L - s * w, a.y - s * L + c * w), F(a.x - c * L + s * w, a.y - s * L - c * w)]; });
+    out.push({ segs, arrows, text: { p: F(g.T.x, g.T.y), str: g.T.str, h: g.T.h } });
+  }
+  return out;
+}
+// overall size dimensions along the bounding box
+function bboxDims(polys) {
+  const [x0, y0, z0, x1, y1, z1] = meshInfo(polys).bb, size = Math.max(x1 - x0, y1 - y0, z1 - z0), o = size * 0.12, ex = size * 0.03;
+  const h = Math.max(D.dim.txt || 2.5, size * 0.04), asz = Math.max(D.dim.asz || 2.5, size * 0.025);
+  const fmt = v => String(+v.toFixed(2));
+  const mk = (a, b2, off) => {
+    const A = v3.add(a, off), B = v3.add(b2, off), u = v3.unit(v3.sub(B, A)), on = v3.unit(off), w = v3.mul(on, asz / 6);
+    const arr = (P, dir) => [P, v3.add(v3.sub(P, v3.mul(dir, asz)), w), v3.sub(v3.sub(P, v3.mul(dir, asz)), w)];
+    return { segs: [[a, v3.add(A, v3.mul(on, ex))], [b2, v3.add(B, v3.mul(on, ex))], [A, B]], arrows: [arr(A, v3.mul(u, -1)), arr(B, u)], text: { p: v3.lerp(A, B, 0.5), str: fmt(v3.len(v3.sub(b2, a))), h }, overall: true };
+  };
+  return [
+    mk([x0, y0, z0], [x1, y0, z0], [0, -o, 0]),
+    mk([x1, y0, z0], [x1, y1, z0], [o, 0, 0]),
+    mk([x0, y0, z0], [x0, y0, z1], [-o * 0.8, -o * 0.4, 0])
+  ];
+}
+function v3Open(polys, title, warn, dims) {
   if (!V3.el) v3Init();
   V3.polys = polys;
+  V3.dims = dims || [];
+  V3.odims = bboxDims(polys);
+  if (V3.showDim == null) V3.showDim = true;
+  V3.showAll = !V3.dims.length;
+  v3DimBtns();
   const info = meshInfo(polys), b = info.bb;
   V3.t = [(b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2];
   V3.R = Math.max(1, Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2);
@@ -3964,9 +4035,9 @@ function v3Init() {
   el.innerHTML = `<div class="v3bar"><b class="v3title">3D</b>
     <div class="v3btns">
       <button data-v3="iso" title="남동 등각">등각</button><button data-v3="front">정면</button><button data-v3="top">평면</button><button data-v3="right">우측</button><button data-v3="iso2" title="남서 등각">등각2</button>
-      <span class="v3sep"></span><button data-v3="mode">와이어프레임</button><button data-v3="stl">STL 저장</button><button data-v3="obj">OBJ 저장</button><button data-v3="close" title="닫기 (Esc)">닫기 ✕</button>
+      <span class="v3sep"></span><button data-v3="dim" aria-pressed="true">치수</button><button data-v3="odim" aria-pressed="false">전체 크기</button><button data-v3="mode">와이어프레임</button><button data-v3="stl">STL 저장</button><button data-v3="obj">OBJ 저장</button><button data-v3="close" title="닫기 (Esc)">닫기 ✕</button>
     </div></div>
-    <canvas class="v3cv"></canvas>
+    <div class="v3wrap"><canvas class="v3cv"></canvas><canvas class="v3ov" aria-hidden="true"></canvas></div>
     <div class="v3foot"><span class="v3info"></span><span class="v3warn" hidden></span><span class="v3help">왼쪽 드래그: 회전 · 오른쪽/가운데 드래그: 이동 · 휠: 확대/축소 · 더블클릭: 전체 보기</span></div>`;
   document.getElementById('stage').appendChild(el);
   V3.el = el; V3.cv = el.querySelector('.v3cv');
@@ -3974,6 +4045,8 @@ function v3Init() {
     const b = ev.target.closest('[data-v3]'); if (!b) return;
     const k = b.dataset.v3;
     if (k === 'close') v3Close();
+    else if (k === 'dim') { V3.showDim = !V3.showDim; v3DimBtns(); v3Draw(); }
+    else if (k === 'odim') { V3.showAll = !V3.showAll; v3DimBtns(); v3Draw(); }
     else if (k === 'mode') { V3.mode = V3.mode === 'shade' ? 'wire' : 'shade'; b.textContent = V3.mode === 'shade' ? '와이어프레임' : '음영'; v3Draw(); }
     else if (k === 'obj') { const nm = (D.name || 'model') + '_3d'; saveFile(nm + '.obj', 'model/obj', objText(V3.polys, nm)); }
     else if (k === 'stl') { const nm = (D.name || 'model') + '_3d'; saveFile(nm + '.stl', 'model/stl', stlText(V3.polys, nm)); }
@@ -4071,7 +4144,37 @@ function v3Render() {
   }
   // axis triad (2D overlay drawn into the GL canvas is not possible; drawn as lines near corner)
   v3Triad(d, r, up, w, h);
+  v3DrawDims(d, r, up, t, sx, sy, w, h, dpr);
 }
+function v3DimBtns() {
+  if (!V3.el) return;
+  const a = V3.el.querySelector('[data-v3="dim"]'), b = V3.el.querySelector('[data-v3="odim"]');
+  a.setAttribute('aria-pressed', V3.showDim ? 'true' : 'false'); a.hidden = !(V3.dims && V3.dims.length);
+  b.setAttribute('aria-pressed', V3.showAll ? 'true' : 'false');
+}
+function v3DrawDims(d, r, up, t, sx, sy, w, h, dpr) {
+  const ov = V3.el.querySelector('.v3ov'); if (!ov) return;
+  if (ov.width !== Math.round(w * dpr) || ov.height !== Math.round(h * dpr)) { ov.width = Math.round(w * dpr); ov.height = Math.round(h * dpr); }
+  const g = ov.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+  const list = [...(V3.showDim ? V3.dims || [] : []), ...(V3.showAll ? V3.odims || [] : [])];
+  if (!list.length) return;
+  const P = p => { const q = v3.sub(p, t); return [(v3.dot(r, q) * sx + 1) / 2 * w, (1 - v3.dot(up, q) * sy) / 2 * h]; };
+  const pxPerUnit = h / (2 * V3.h);
+  const wire = V3.mode === 'wire', col = wire ? '#7fd6c4' : '#ffd166', halo = 'rgba(20,26,33,0.82)';
+  g.lineWidth = 1.3; g.strokeStyle = col; g.fillStyle = col; g.setLineDash([]);
+  for (const dm of list) {
+    g.beginPath(); for (const [a, b] of dm.segs) { const A = P(a), B = P(b); g.moveTo(A[0], A[1]); g.lineTo(B[0], B[1]); } g.stroke();
+    for (const tr of dm.arrows) { const [A, B, C] = tr.map(P); g.beginPath(); g.moveTo(A[0], A[1]); g.lineTo(B[0], B[1]); g.lineTo(C[0], C[1]); g.closePath(); g.fill(); }
+  }
+  for (const dm of list) {
+    const [x, y] = P(dm.text.p), fs = Math.max(11, Math.min(26, dm.text.h * pxPerUnit));
+    g.font = `600 ${fs}px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    const tw = g.measureText(dm.text.str).width;
+    g.fillStyle = halo; g.fillRect(x - tw / 2 - 4, y - fs / 2 - 2, tw + 8, fs + 4);
+    g.fillStyle = col; g.fillText(dm.text.str, x, y);
+  }
+}
+
 function v3Triad(d, r, up, w, h) {
   const gl = V3.gl, L = V3.loc, s = 34, ox = -1 + 50 / w * 2, oy = -1 + 50 / h * 2;
   const pts = [];
@@ -4116,7 +4219,7 @@ def('MAKE3D', { alias: ['3D', '3DM', 'M3D', 'TO3D'], label: '3면도로 3D 만�
   if (views.length === 1) {
     log('도면이 1개로만 인식됐습니다. 세 도면이 서로 맞닿아 있으면 하나로 보이니 도면 사이를 조금 띄워 주세요. 이 도면 하나를 그대로 밀어 올리려면 높이를 입력하세요 (Esc: 취소).', 'e');
     const h = await getNum('돌출 높이 지정 <10>:', { def: 10 });
-    res = extrudeOnly(views[0], Math.abs(h) || 10); title = '3D — 돌출';
+    const hh = Math.abs(h) || 10; res = extrudeOnly(views[0], hh); res.maps = [{ bb: views[0].bb, f: (x, y) => [x, y, hh], axis: 2, dir: -1 }]; title = '3D — 돌출';
   } else {
     const id = identifyViews(views);
     if (!id) { G3.marks = views.map(v => [(v.bb[0] + v.bb[2]) / 2, (v.bb[1] + v.bb[3]) / 2]); redraw(); log(`도면 ${views.length}개를 찾았지만 서로 줄이 맞지 않아 배치를 알아볼 수 없습니다. 평면도는 정면도와 좌우 폭이, 측면도는 정면도와 높이가 겹치게 나란히 두세요.`, 'e'); return; }
@@ -4129,11 +4232,14 @@ def('MAKE3D', { alias: ['3D', '3DM', 'M3D', 'TO3D'], label: '3면도로 3D 만�
   for (const w of res.warn) log('주의: ' + w, 'e');
   const info = meshInfo(res.polys), b = info.bb;
   log(`3D 생성 완료: ${fmtN(b[3] - b[0], 2)} × ${fmtN(b[4] - b[1], 2)} × ${fmtN(b[5] - b[2], 2)}, 부피 ${fmtN(Math.abs(info.vol), 1)} (${Math.round(performance.now() - t0)}ms)`, 'r');
-  V3.last = { polys: res.polys, title, warn: res.warn };
-  v3Open(res.polys, title, res.warn);
+  const dimEnts = list.filter(e => e.type === 'dim' && isVisible(e));
+  const dims = dims3D(dimEnts.length ? dimEnts : D.ents.filter(e => e.type === 'dim' && isVisible(e)), res.maps, res.polys);
+  if (dims.length) log(`도면 치수 ${dims.length}개를 3D에 함께 표시합니다. (3D 창의 '치수' 버튼으로 켜고 끔)`, 'm');
+  V3.last = { polys: res.polys, title, warn: res.warn, dims };
+  v3Open(res.polys, title, res.warn, dims);
 } });
 def('VIEW3D', { alias: ['3DV', '3DVIEW'], label: '3D 보기 다시 열기', icon: 'cube', instant: true, fn: () => {
-  if (V3.last) v3Open(V3.last.polys, V3.last.title, V3.last.warn); else log('아직 만든 3D 모델이 없습니다. 3D 명령을 먼저 실행하세요.', 'e');
+  if (V3.last) v3Open(V3.last.polys, V3.last.title, V3.last.warn, V3.last.dims); else log('아직 만든 3D 모델이 없습니다. 3D 명령을 먼저 실행하세요.', 'e');
 } });
 def('DEMO3D', { alias: ['3DDEMO'], label: '3D 예제 도면 (3면도)', icon: 'cube', instant: true, fn: () => {
   if (R.running) cancelRunning();

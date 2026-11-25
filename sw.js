@@ -1,5 +1,5 @@
 // 미니캐드 offline cache. Bump VERSION when files change.
-const VERSION = 'mini-cad-v11';
+const VERSION = 'mini-cad-v12';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png'];
 self.addEventListener('install', ev => { ev.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', ev => {
